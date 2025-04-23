@@ -43,7 +43,7 @@ class FaceID_Register:
                 return
 
             detector = dlib.get_frontal_face_detector()
-            predictor = dlib.shape_predictor("C:/Đồ án Python/shape_predictor_68_face_landmarks.dat/shape_predictor_68_face_landmarks.dat")
+            predictor = dlib.shape_predictor("D:\Face_ID Project\shape_predictor_68_face_landmarks.dat\shape_predictor_68_face_landmarks.dat")
 
             cv2.namedWindow("Face Scanning")
 

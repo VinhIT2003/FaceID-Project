@@ -37,7 +37,7 @@ class FaceIDLogin:
                 return
 
             detector = dlib.get_frontal_face_detector()
-            predictor = dlib.shape_predictor("C:/Đồ án Python/shape_predictor_68_face_landmarks.dat/shape_predictor_68_face_landmarks.dat")
+            predictor = dlib.shape_predictor("D:\Face_ID Project\shape_predictor_68_face_landmarks.dat\shape_predictor_68_face_landmarks.dat")
 
             def shape_to_np(shape, dtype="int"):
                 coords = np.zeros((68, 2), dtype=dtype)
