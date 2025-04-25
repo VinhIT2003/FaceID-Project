@@ -2,54 +2,71 @@ import cv2
 import dlib
 import time
 import os
-import subprocess
+import platform
+import socket
 import numpy as np
-from tkinter import messagebox
 import face_recognition
 
 class FaceIDLogin:
-    def __init__(self, root, username_entry):
-        self.root = root
-        self.username = username_entry  # Entry chứa mã nhân viên
+    def __init__(self, username, sock):
+        self.username = username.strip()
+        self.sock = sock  # socket để gửi kết quả
+        self.face_id_file = os.path.join("Face_ID", f"{self.username}.txt")
+
+    def send_result(self, status, message):
+        result = f"{status}:{self.username}:{message}"
+        self.sock.send(result.encode())
 
     def login_with_face_id(self):
-        emp_no = self.username.get().strip()
-        face_id_file = f"D:/Face_ID/{emp_no}.txt"
-
-        if not os.path.exists(face_id_file):
-            messagebox.showerror("Error", "You haven't registered your face. Please register your Face ID to log in", parent=self.root)
+        if not os.path.exists(self.face_id_file):
+            self.send_result("fail", "No Face ID registered")
             return
 
         try:
-            with open(face_id_file, "rb") as f:
+            with open(self.face_id_file, "rb") as f:
                 stored_encoding = np.frombuffer(f.read(), dtype=np.float64)
 
             if stored_encoding.shape != (128,) or np.all(stored_encoding == 0):
-                messagebox.showerror("Error", "Invalid Face ID data!", parent=self.root)
+                self.send_result("fail", "Invalid Face ID data")
                 return
 
-            cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            # Camera initialization based on OS
+            system_platform = platform.system()
+            if system_platform == "Windows":
+                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+            else:
+                cap = cv2.VideoCapture(0)
+
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
             if not cap.isOpened():
-                messagebox.showerror("Error", "Unable to access the camera!", parent=self.root)
+                self.send_result("fail", "Cannot access camera")
                 return
 
             detector = dlib.get_frontal_face_detector()
-            predictor = dlib.shape_predictor("D:\Face_ID Project\shape_predictor_68_face_landmarks.dat\shape_predictor_68_face_landmarks.dat")
+            predictor_path = "Face_ID_Project/shape_predictor_68_face_landmarks.dat"
+            predictor = dlib.shape_predictor(predictor_path)
 
-            def shape_to_np(shape, dtype="int"):
-                coords = np.zeros((68, 2), dtype=dtype)
+            def shape_to_np(shape):
+                coords = np.zeros((68, 2), dtype=int)
                 for i in range(68):
                     coords[i] = (shape.part(i).x, shape.part(i).y)
                 return coords
+
+            def calculate_ear(eye):
+                A = np.linalg.norm(eye[1] - eye[5])
+                B = np.linalg.norm(eye[2] - eye[4])
+                C = np.linalg.norm(eye[0] - eye[3])
+                return (A + B) / (2.0 * C)
 
             EAR_THRESHOLD = 0.25
             REQUIRED_BLINKS = 5
             SHARPNESS_THRESHOLD = 120
             FACE_MATCH_THRESHOLD = 0.44
             MIN_VERIFICATION_DURATION = 15
+            MIN_EYE_CLOSED_FRAMES = 3
+            MAX_NO_MOVEMENT = 20
 
             blink_count = 0
             eye_closed_frames = 0
@@ -58,16 +75,7 @@ class FaceIDLogin:
             start_time = time.time()
             frame_counter = 0
             blink_timestamps = []
-
-            MIN_EYE_CLOSED_FRAMES = 3
-            MAX_NO_MOVEMENT = 20
             no_movement_frames = 0
-
-            def calculate_ear(eye):
-                A = np.linalg.norm(eye[1] - eye[5])
-                B = np.linalg.norm(eye[2] - eye[4])
-                C = np.linalg.norm(eye[0] - eye[3])
-                return (A + B) / (2.0 * C)
 
             while True:
                 ret, frame = cap.read()
@@ -77,31 +85,25 @@ class FaceIDLogin:
                 frame = cv2.resize(frame, (640, 480))
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
                 frame_counter += 1
-                face_locations = face_recognition.face_locations(rgb)
 
+                face_locations = face_recognition.face_locations(rgb)
                 if not face_locations:
                     no_movement_frames += 1
-                    cv2.putText(frame, "No face detected!", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    cv2.imshow("Face ID Login", frame)
                     if cv2.waitKey(1) & 0xFF == 27:
                         break
                     continue
 
-                no_movement_frames = 0  # reset
+                no_movement_frames = 0
 
                 top, right, bottom, left = face_locations[0]
                 face_crop = gray[top:bottom, left:right]
                 sharpness = cv2.Laplacian(face_crop, cv2.CV_64F).var()
-
                 if sharpness < SHARPNESS_THRESHOLD:
+                    self.send_result("fail", "Blurry image detected")
                     cap.release()
                     cv2.destroyAllWindows()
-                    messagebox.showerror("Spoofing Alert", "Image is blurry – possible spoofing detected!", parent=self.root)
                     return
-
-                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
 
                 rects = detector(gray, 0)
                 if rects:
@@ -133,17 +135,17 @@ class FaceIDLogin:
                         if distance < FACE_MATCH_THRESHOLD:
                             face_verified = True
                         else:
+                            self.send_result("fail", "Face ID does not match")
                             cap.release()
                             cv2.destroyAllWindows()
-                            messagebox.showerror("Error", "Face ID does not match !", parent=self.root)
                             return
 
                         verification_duration = time.time() - start_time
                         if verification_duration >= MIN_VERIFICATION_DURATION:
                             if blink_count < REQUIRED_BLINKS or not face_verified or no_movement_frames > MAX_NO_MOVEMENT:
+                                self.send_result("fail", "Verification failed - spoofing suspected")
                                 cap.release()
                                 cv2.destroyAllWindows()
-                                messagebox.showerror("Spoofing Alert", "Verification failed: possible spoofing detected!", parent=self.root)
                                 return
 
                         if (
@@ -151,16 +153,11 @@ class FaceIDLogin:
                             face_verified and
                             verification_duration >= MIN_VERIFICATION_DURATION
                         ):
+                            self.send_result("success", "Face ID verified successfully")
                             cap.release()
                             cv2.destroyAllWindows()
-                            messagebox.showinfo("Success", f"Welcome {emp_no}!", parent=self.root)
-                            self.root.destroy()
-                            subprocess.Popen(['python', 'dashboard.py', emp_no])
                             return
 
-                cv2.putText(frame, f"Blink: {blink_count}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-                cv2.putText(frame, "Verifying face...", (20, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                cv2.imshow("Face ID Login", frame)
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
 
@@ -168,4 +165,4 @@ class FaceIDLogin:
             cv2.destroyAllWindows()
 
         except Exception as e:
-            messagebox.showerror("Error", str(e), parent=self.root)
+            self.send_result("fail", f"Error: {str(e)}")
